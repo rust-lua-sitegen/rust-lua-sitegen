@@ -1,15 +1,28 @@
 use lua_html;
-use mlua::prelude::Lua;
 
 fn main() {
-    let lua = lua_html::lua::create_lua();
+    let lua = lua_html::create_lua();
 
-    let chunk = lua.load(
+    let result = lua_html::render(
+        &lua,
+        lua_html::FormatOptions::Indent { tab_width: 4 },
         r#"
-        local h = el.p { "Hello, world! <test>", el.p { "hi" } }
-        print(html.render_no_indent(h))
+        return html.seq {
+            html.raw "<!DOCTYPE html>",
+            el.html {
+                el.head {
+                    el.title "Hello, World!",
+                },
+                el.body {
+                    el.h1 "<<< Hello, World! >>>",
+                    el.br {},
+                    el.p "This is a paragraph.",
+                },
+            },
+        }
     "#,
-    );
+    )
+    .unwrap();
 
-    chunk.exec().unwrap();
+    println!("{}", result);
 }
