@@ -1,7 +1,5 @@
-[package]
-name = "lua_html"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-mlua = { version = "0.9.8", features = ["lua54", "vendored"] }
+[workspace]
+resolver = "2"
+members = [
+    "lua_html",
+]
