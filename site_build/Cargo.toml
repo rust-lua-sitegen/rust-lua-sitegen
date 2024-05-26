@@ -1,0 +1,13 @@
+[package]
+name = "site_build"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.7.5"
+camino = "1.1.7"
+log = "0.4.21"
+mime_guess = "2.0.4"
+notify = "6.1.1"
+thiserror = "1.0.61"
+tokio = "1.37.0"

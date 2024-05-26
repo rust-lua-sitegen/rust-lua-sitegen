@@ -1,5 +1,5 @@
 [workspace]
 resolver = "2"
 members = [
-    "lua_html",
+    "lua_html", "site_build",
 ]
