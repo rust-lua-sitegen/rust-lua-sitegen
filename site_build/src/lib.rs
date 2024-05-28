@@ -1,13 +1,15 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::io::{Error, Result};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::{Arc, RwLock};
 
 use axum::http::HeaderMap;
 use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
+use clap::Parser;
 use notify::Watcher;
-use tokio::net::ToSocketAddrs;
 
 #[derive(Clone, Debug)]
 enum InMemoryFsEntry {
@@ -314,6 +316,9 @@ impl<'a> Site<'a> {
 pub struct SiteBuilder<F> {
     source_dir: Utf8PathBuf,
     build_fn: F,
+    target_dir: Option<Utf8PathBuf>,
+    bind_addrs: Vec<SocketAddr>,
+    use_env_logger: bool,
 }
 
 enum SiteCache {
@@ -357,6 +362,40 @@ fn catch_panic<R, F: FnOnce() -> R + std::panic::UnwindSafe>(
     }
 }
 
+#[derive(clap::Parser, Debug)]
+struct CliArgs {
+    #[command(subcommand)]
+    subcommand: Subcommand,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Subcommand {
+    /// Build the site to a directory
+    #[clap(name = "build")]
+    Build(BuildArgs),
+
+    /// Serve the site over HTTP
+    #[clap(name = "serve")]
+    Serve(ServeArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct BuildArgs {
+    /// Path to target directory
+    #[arg(short, long)]
+    target_dir: Option<Utf8PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+struct ServeArgs {
+    /// Address at which to bind the HTTP server
+    #[arg(short, long)]
+    bind: Option<Vec<String>>,
+}
+
+const TARGET_DIR_SENTINEL_FILE: &str =
+    ".site_build_target_dir_2e59a0e8_2f9c_4bd5_8a36_e371c2e73aa1";
+
 impl<F, E> SiteBuilder<F>
 where
     F: (for<'a, 'b> FnMut(&'a mut Site<'b>) -> std::result::Result<(), E>) + Send + Sync + 'static,
@@ -366,13 +405,82 @@ where
         Self {
             source_dir: source_dir.as_ref().to_path_buf(),
             build_fn,
+            target_dir: None,
+            bind_addrs: vec![SocketAddr::new(
+                IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                8080,
+            )],
+            use_env_logger: true,
         }
     }
 
-    pub fn build(mut self, target_dir: impl AsRef<Utf8Path>) -> std::result::Result<(), E> {
+    pub fn target_dir(mut self, target_dir: impl AsRef<Utf8Path>) -> Self {
+        self.target_dir = Some(target_dir.as_ref().to_path_buf());
+        self
+    }
+
+    pub fn bind_addrs(mut self, bind_addrs: impl std::net::ToSocketAddrs) -> Result<Self> {
+        self.bind_addrs = bind_addrs.to_socket_addrs()?.collect();
+        Ok(self)
+    }
+
+    pub fn use_env_logger(mut self, use_env_logger: bool) -> Self {
+        self.use_env_logger = use_env_logger;
+        self
+    }
+
+    pub fn build(mut self) -> std::result::Result<(), E> {
+        env_logger::builder()
+            .filter_level(log::LevelFilter::Info)
+            .init();
+
+        let Some(target_dir) = self.target_dir else {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "no target directory configured",
+            )
+            .into());
+        };
+
+        // Ensure target directory is deleted if it exists
+        match target_dir.metadata() {
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+            Ok(metadata) if metadata.is_dir() => {
+                // If sentinel file found, then we can safely delete the directory
+                let sentinel_path = target_dir.join(TARGET_DIR_SENTINEL_FILE);
+                if sentinel_path.exists() {
+                    std::fs::remove_dir_all(&target_dir)?;
+                } else {
+                    return Err(std::io::Error::new(
+                        ErrorKind::AlreadyExists,
+                        format!(
+                            "directory already exists: {:?}\n\
+                            \n\
+                            'site_build' looks for a file called '.site_build_target_dir_2e59a0e8_2f9c_4bd5_8a36_e371c2e73aa1'\n\
+                            the root of the target directory to determine if it is safe to delete it. If this file is absent,\n\
+                            you must delete the directory manually before 'site_build' will build to it.",
+                            target_dir
+                        ),
+                    )
+                    .into());
+                }
+            }
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("not a directory: {:?}", target_dir),
+                )
+                .into());
+            }
+        }
+
+        std::fs::create_dir_all(&target_dir)?;
+        std::fs::write(target_dir.join(TARGET_DIR_SENTINEL_FILE), "")?;
+
         let source_dir = self.source_dir.clone();
         let target = OutputTarget::InDirectory {
-            dir: target_dir.as_ref().to_path_buf(),
+            dir: target_dir.clone(),
         };
         let mut inner = SiteInner { source_dir, target };
         let mut site = Site { inner: &mut inner };
@@ -510,7 +618,19 @@ where
         }
     }
 
-    pub async fn serve(self, socket_addrs: impl ToSocketAddrs) -> Result<()> {
+    pub async fn serve(mut self) -> Result<()> {
+        env_logger::builder()
+            .filter_level(log::LevelFilter::Info)
+            .init();
+
+        let bind_addrs = std::mem::take(&mut self.bind_addrs);
+        if bind_addrs.is_empty() {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "no bind addresses configured",
+            ));
+        }
+
         register_panic_hook();
 
         let source_dir = self.source_dir.clone();
@@ -560,9 +680,64 @@ where
                 }),
             );
 
-        let listener = tokio::net::TcpListener::bind(socket_addrs).await?;
+        let listener = tokio::net::TcpListener::bind(&bind_addrs as &[_]).await?;
+
+        log::info!("listening on: {:?}", bind_addrs);
+
         axum::serve(listener, app).await?;
 
         Ok(())
+    }
+
+    async fn run_from_args_object(mut self, args: CliArgs) -> std::result::Result<(), E> {
+        match args.subcommand {
+            Subcommand::Build(build) => {
+                if let Some(target_dir) = build.target_dir {
+                    self = self.target_dir(target_dir);
+                }
+                self.build()?;
+            }
+            Subcommand::Serve(serve) => {
+                if let Some(bind) = serve.bind {
+                    let mut bind_addrs = Vec::new();
+                    for addr in bind {
+                        bind_addrs.extend(addr.to_socket_addrs()?.collect::<Vec<_>>());
+                    }
+                    self.bind_addrs = bind_addrs;
+                }
+                self.serve().await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn run_from_args<T: Into<OsString> + Clone>(
+        self,
+        args_iter: impl Iterator<Item = T>,
+    ) -> std::result::Result<(), E> {
+        let args = CliArgs::try_parse_from(args_iter).map_err(|e| {
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("failed to parse arguments: {}", e),
+            )
+        })?;
+        self.run_from_args_object(args).await
+    }
+
+    pub async fn try_run_from_cli(self) -> std::result::Result<(), E> {
+        let args =
+            CliArgs::try_parse().map_err(|e| std::io::Error::new(ErrorKind::InvalidInput, e))?;
+        self.run_from_args_object(args).await
+    }
+
+    pub async fn run_from_cli(self) -> ! {
+        let result = self.try_run_from_cli().await;
+        match result {
+            Ok(()) => std::process::exit(0),
+            Err(err) => {
+                eprintln!("{}", err);
+                std::process::exit(1);
+            }
+        }
     }
 }

@@ -4,7 +4,7 @@ async fn main() {
         site.copy_source_to_output("index.html", "index.html")?;
         Ok(())
     })
-    .serve("localhost:8080")
+    .target_dir("./web-out/")
+    .run_from_cli()
     .await
-    .unwrap();
 }
