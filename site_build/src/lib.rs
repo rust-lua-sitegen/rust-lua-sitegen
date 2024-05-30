@@ -195,6 +195,7 @@ impl OutputTarget {
             }
             OutputTarget::InDirectory { dir } => {
                 let abs_path = dir.join(path);
+                std::fs::create_dir_all(abs_path.parent().unwrap())?;
                 std::fs::write(&abs_path, content)
             }
         }
@@ -261,6 +262,25 @@ impl<'a> Site<'a> {
         Ok(entries)
     }
 
+    /// `src` must be an absolute path and `dst` must be a relative path.
+    fn copy_source_to_output_rec(
+        &mut self,
+        src: impl AsRef<Utf8Path>,
+        dst: impl AsRef<Utf8Path>,
+    ) -> Result<()> {
+        if src.as_ref().is_dir() {
+            for entry in src.as_ref().read_dir_utf8()? {
+                let entry = entry?;
+                let entry_dst = dst.as_ref().join(entry.file_name());
+                self.copy_source_to_output_rec(entry.path(), entry_dst)?;
+            }
+        } else {
+            let content = std::fs::read(src.as_ref())?;
+            self.inner.target.write(dst.as_ref(), &content)?;
+        }
+        Ok(())
+    }
+
     pub fn copy_source_to_output(
         &mut self,
         src: impl AsRef<Utf8Path>,
@@ -272,9 +292,7 @@ impl<'a> Site<'a> {
             dst.as_ref()
         );
         let src = self.canonicalize_abs_source_path(src.as_ref())?;
-        let dst = dst.as_ref();
-        let content = std::fs::read(&src)?;
-        self.inner.target.write(dst, &content)
+        self.copy_source_to_output_rec(src, dst)
     }
 
     pub fn write_output(
