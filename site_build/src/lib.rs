@@ -280,6 +280,12 @@ impl<'a> Site<'a> {
         path.strip_prefix(&self.inner.source_dir).unwrap()
     }
 
+    pub fn raw_source_path(&mut self, path: impl AsRef<Utf8Path>) -> Result<Utf8PathBuf> {
+        let path = path.as_ref();
+        let canon_path = self.canonicalize_source_path(path)?;
+        Ok(canon_path)
+    }
+
     pub fn read_source_bytes(&mut self, path: impl AsRef<Utf8Path>) -> Result<Vec<u8>> {
         log::trace!("reading source file (binary): {:?}", path.as_ref());
         let canon_abs_path = self.canonicalize_source_path(path.as_ref())?;
