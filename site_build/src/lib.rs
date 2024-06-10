@@ -202,6 +202,43 @@ impl OutputTarget {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileType(std::fs::FileType);
+
+impl FileType {
+    pub fn is_dir(&self) -> bool {
+        self.0.is_dir()
+    }
+
+    pub fn is_file(&self) -> bool {
+        self.0.is_file()
+    }
+}
+
+#[derive(Debug)]
+pub struct DirEntry {
+    inner: std::fs::DirEntry,
+    path: Utf8PathBuf,
+}
+
+impl DirEntry {
+    pub fn file_name(&self) -> &str {
+        self.path.file_name().unwrap()
+    }
+
+    pub fn file_type(&self) -> Result<FileType> {
+        self.inner.file_type().map(FileType)
+    }
+
+    pub fn into_path(self) -> Utf8PathBuf {
+        self.path
+    }
+
+    pub fn path(&self) -> &Utf8Path {
+        &self.path
+    }
+}
+
 #[derive(Debug)]
 struct SiteInner {
     source_dir: Utf8PathBuf,
@@ -218,7 +255,7 @@ impl<'a> Site<'a> {
         Site { inner: self.inner }
     }
 
-    fn canonicalize_abs_source_path(&mut self, path: &Utf8Path) -> Result<Utf8PathBuf> {
+    fn canonicalize_source_path(&mut self, path: &Utf8Path) -> Result<Utf8PathBuf> {
         for component in path.components() {
             match component {
                 Utf8Component::Prefix(_) | Utf8Component::RootDir => {
@@ -238,28 +275,53 @@ impl<'a> Site<'a> {
         Ok(canon_path)
     }
 
+    /// `path` must be an absolute path prefixed by the source directory.
+    fn relativize_source_path<'b>(&mut self, path: &'b Utf8Path) -> &'b Utf8Path {
+        path.strip_prefix(&self.inner.source_dir).unwrap()
+    }
+
     pub fn read_source_bytes(&mut self, path: impl AsRef<Utf8Path>) -> Result<Vec<u8>> {
         log::trace!("reading source file (binary): {:?}", path.as_ref());
-        let canon_abs_path = self.canonicalize_abs_source_path(path.as_ref())?;
+        let canon_abs_path = self.canonicalize_source_path(path.as_ref())?;
         let bytes = std::fs::read(canon_abs_path)?;
         Ok(bytes)
     }
 
     pub fn read_source_str(&mut self, path: impl AsRef<Utf8Path>) -> Result<String> {
         log::trace!("reading source file (text  ): {:?}", path.as_ref());
-        let canon_abs_path = self.canonicalize_abs_source_path(path.as_ref())?;
+        let canon_abs_path = self.canonicalize_source_path(path.as_ref())?;
         let s = std::fs::read_to_string(&canon_abs_path)?;
         Ok(s)
     }
 
-    pub fn read_source_dir(&mut self, path: impl AsRef<Utf8Path>) -> Result<Vec<String>> {
+    pub fn read_source_dir(&mut self, path: impl AsRef<Utf8Path>) -> Result<Vec<DirEntry>> {
         log::trace!("reading source directory: {:?}", path.as_ref());
-        let canon_abs_path = self.canonicalize_abs_source_path(path.as_ref())?;
+        let canon_abs_path = self.canonicalize_source_path(path.as_ref())?;
         let entries = canon_abs_path
             .read_dir_utf8()?
-            .map(|entry| entry.map(|entry| entry.file_name().to_string()))
+            .map(|entry| {
+                entry.map(|entry| {
+                    let path = self.relativize_source_path(entry.path()).to_owned();
+                    DirEntry {
+                        inner: entry.into_inner(),
+                        path,
+                    }
+                })
+            })
             .collect::<Result<Vec<_>>>()?;
         Ok(entries)
+    }
+
+    pub fn source_is_file(&mut self, path: impl AsRef<Utf8Path>) -> Result<bool> {
+        log::trace!("checking if source is a file: {:?}", path.as_ref());
+        let canon_abs_path = self.canonicalize_source_path(path.as_ref())?;
+        Ok(canon_abs_path.is_file())
+    }
+
+    pub fn source_is_dir(&mut self, path: impl AsRef<Utf8Path>) -> Result<bool> {
+        log::trace!("checking if source is a directory: {:?}", path.as_ref());
+        let canon_abs_path = self.canonicalize_source_path(path.as_ref())?;
+        Ok(canon_abs_path.is_dir())
     }
 
     /// `src` must be an absolute path and `dst` must be a relative path.
@@ -291,7 +353,7 @@ impl<'a> Site<'a> {
             src.as_ref(),
             dst.as_ref()
         );
-        let src = self.canonicalize_abs_source_path(src.as_ref())?;
+        let src = self.canonicalize_source_path(src.as_ref())?;
         self.copy_source_to_output_rec(src, dst)
     }
 
