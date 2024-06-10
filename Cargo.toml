@@ -1,5 +1,3 @@
 [workspace]
 resolver = "2"
-members = [
-    "lua_html", "site_build",
-]
+members = [ "dart_sass", "lua_html", "site_build" ]

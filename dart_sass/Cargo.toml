@@ -1,0 +1,11 @@
+[package]
+name = "dart_sass"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+flate2 = "1.0.30"
+reqwest = { version = "0.12.4", features = ["blocking"] }
+tar = "0.4.40"
+thiserror = "1.0.61"
+zip = "2.1.1"
