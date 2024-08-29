@@ -250,12 +250,27 @@ pub struct Site<'a> {
     inner: &'a mut SiteInner,
 }
 
+#[derive(Debug)]
+pub struct WalkDirEntry {
+    pub full_path: Utf8PathBuf,
+    pub rel_path: Utf8PathBuf,
+}
+
+fn annotate_source_path(path: &Utf8Path) -> (impl FnOnce(std::io::Error) -> std::io::Error + '_) {
+    move |err| {
+        std::io::Error::new(
+            err.kind(),
+            format!("error accessing source path {:?}: {}", path, err),
+        )
+    }
+}
+
 impl<'a> Site<'a> {
     pub fn reborrow<'b>(&'b mut self) -> Site<'b> {
         Site { inner: self.inner }
     }
 
-    fn canonicalize_source_path(&mut self, path: &Utf8Path) -> Result<Utf8PathBuf> {
+    fn canonicalize_source_path_inner(&mut self, path: &Utf8Path) -> Result<Utf8PathBuf> {
         for component in path.components() {
             match component {
                 Utf8Component::Prefix(_) | Utf8Component::RootDir => {
@@ -273,6 +288,11 @@ impl<'a> Site<'a> {
             return Err(non_rel_path_error(path));
         }
         Ok(canon_path)
+    }
+
+    fn canonicalize_source_path(&mut self, path: &Utf8Path) -> Result<Utf8PathBuf> {
+        self.canonicalize_source_path_inner(path)
+            .map_err(annotate_source_path(path))
     }
 
     /// `path` must be an absolute path prefixed by the source directory.
@@ -316,6 +336,35 @@ impl<'a> Site<'a> {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(entries)
+    }
+
+    pub fn walk_source_dir(&mut self, path: impl AsRef<Utf8Path>) -> Result<Vec<WalkDirEntry>> {
+        fn walk_source_dir_rec(
+            site: &mut Site,
+            full_path: &Utf8Path,
+            rel_path: &Utf8Path,
+            results: &mut Vec<WalkDirEntry>,
+        ) -> Result<()> {
+            for entry in site.read_source_dir(&full_path)? {
+                if entry.file_type()?.is_dir() {
+                    walk_source_dir_rec(
+                        site,
+                        entry.path(),
+                        &rel_path.join(entry.file_name()),
+                        results,
+                    )?;
+                } else {
+                    results.push(WalkDirEntry {
+                        full_path: entry.path().to_owned(),
+                        rel_path: rel_path.join(entry.file_name()),
+                    });
+                }
+            }
+            Ok(())
+        }
+        let mut results = Vec::new();
+        walk_source_dir_rec(self, path.as_ref(), "".into(), &mut results)?;
+        Ok(results)
     }
 
     pub fn source_is_file(&mut self, path: impl AsRef<Utf8Path>) -> Result<bool> {
