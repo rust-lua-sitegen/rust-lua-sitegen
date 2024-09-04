@@ -5,7 +5,6 @@ fn main() {
 
     let result = lua_html::render(
         &lua,
-        lua_html::FormatOptions::Indent { tab_width: 4 },
         r#"
         return html.seq {
             html.raw "<!DOCTYPE html>",
