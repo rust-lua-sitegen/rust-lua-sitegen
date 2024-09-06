@@ -220,6 +220,7 @@ pub fn init_modules(lua: &Lua) -> mlua::Result<Modules> {
                             table.insert(attrs, {k:gsub("_", "-"), v})
                         end
                     end
+                    table.sort(attrs, function(a, b) return a[1] < b[1] end)
                     local children = {}
                     for _, c in ipairs(content) do
                         table.insert(children, c)
