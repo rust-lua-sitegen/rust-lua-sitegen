@@ -538,7 +538,7 @@ where
 {
     pub fn new(source_dir: impl AsRef<Utf8Path>, build_fn: F) -> Self {
         Self {
-            source_dir: source_dir.as_ref().canonicalize_utf8().unwrap(),
+            source_dir: source_dir.as_ref().to_path_buf(),
             build_fn,
             target_dir: None,
             bind_addrs: vec![SocketAddr::new(
@@ -550,7 +550,7 @@ where
     }
 
     pub fn target_dir(mut self, target_dir: impl AsRef<Utf8Path>) -> Self {
-        self.target_dir = Some(target_dir.as_ref().canonicalize_utf8().unwrap());
+        self.target_dir = Some(target_dir.as_ref().to_path_buf());
         self
     }
 
